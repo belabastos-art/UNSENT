@@ -1,104 +1,122 @@
-// let express = require('express');
-//Install and load lowdb & gist 
+// Install and load dependencies
 import 'dotenv/config';
 import express from 'express';
 import { Low } from 'lowdb';
-import { GistDB } from 'gistdb';
-import bodyParser from 'body-parser';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
 
-//Initialize the express 'app' object
+// Initialize express app
 let app = express();
 
-//Connect to database
+// Custom Gist Adapter for LowDB (using fetch API)
+class GistAdapter {
+    constructor(gistId, token, filename) {
+        this.gistId = gistId;
+        this.token = token;
+        this.filename = filename;
+    }
+
+    async read() {
+        try {
+            const response = await fetch(`https://api.github.com/gists/${this.gistId}`, {
+                headers: {
+                    'Authorization': `token ${this.token}`,
+                    'Accept': 'application/vnd.github.v3+json'
+                }
+            });
+            
+            const gist = await response.json();
+            const content = gist.files[this.filename]?.content;
+            
+            return content ? JSON.parse(content) : null;
+        } catch (error) {
+            console.error('Error reading from Gist:', error);
+            return null;
+        }
+    }
+
+    async write(data) {
+        try {
+            await fetch(`https://api.github.com/gists/${this.gistId}`, {
+                method: 'PATCH',
+                headers: {
+                    'Authorization': `token ${this.token}`,
+                    'Accept': 'application/vnd.github.v3+json',
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    files: {
+                        [this.filename]: {
+                            content: JSON.stringify(data, null, 2)
+                        }
+                    }
+                })
+            });
+        } catch (error) {
+            console.error('Error writing to Gist:', error);
+        }
+    }
+}
+
+// Connect to database with custom Gist adapter
 let defaultData = { confessionsData: [] };
-let adapter = new GistDB({
-    token: process.env.GIST_TOKEN,
-    gistId: process.env.GIST_ID,
-    filename: process.env.GIST_FILENAME
-});
+let adapter = new GistAdapter(
+    process.env.GIST_ID,
+    process.env.GIST_TOKEN,
+    process.env.GIST_FILENAME
+);
 let db = new Low(adapter, defaultData);
 
-//Initialize/read database
-db.read().then(() => {
-    console.log('Database intialized');
-})
+// Initialize/read database
+await db.read();
+db.data ||= defaultData;
+console.log('Database initialized with Gist');
+console.log('Current confessions:', db.data.confessionsData.length);
 
-//Initialize the express 'app' object 2
+// Serve static files
 app.use('/', express.static('public'));
 
-//To parse JSON
+// Parse JSON
 app.use(express.json());
 
-//Route listening for a post request
-app.post('/newData', (request, response) => {
-    console.log(request.body);
-    let obj = {
-        msg: request.body.msg
-    }
-    //Add value to database
+// Route for posting new data
+app.post('/newData', async (request, response) => {
+    console.log('POST /newData:', request.body);
+    
+    let obj = { msg: request.body.msg };
     db.data.confessionsData.push(obj);
-    db.write()
-        .then(() => {
-            response.json({ task: "success" });
-        });
+    await db.write();
+    
+    response.json({ task: "success" });
 });
 
-app.get('/getData', (request, response) => {
-    //Load values/fetch from database
-    db.read()
-        .then(() => {
-            let obj = { data: db.data.confessionsData }
-            response.json(obj);
-        });
+// Route for getting all data
+app.get('/getData', async (request, response) => {
+    await db.read();
+    response.json({ data: db.data.confessionsData });
 });
 
-
-//Initialize HTTP server
-//let http = import('http');
-// let server = http.createServer(app);
+// Initialize HTTP server
 let server = createServer(app);
 let port = process.env.PORT || 3000;
 server.listen(port, () => {
-    console.log('Server listening at port:' + port);
+    console.log('Server listening at port:', port);
 });
 
-//Initialize socket.io
-// let io = require('socket.io');
+// Initialize socket.io
 let io = new Server(server);
 
-//Listen for individual clients to connect
 io.sockets.on('connection', function (socket) {
-    console.log('A new client has entered:' + socket.id);
+    console.log('Client connected:', socket.id);
 
-    //Listen for a message named 'msg' from this client
-    socket.on('msg', function (data) {
-        console.log('Received a msg event');
-        console.log(data);
-
-        //Save confessions to db.json
-        let obj = {
-            msg: data.msg
-        }
-
+    socket.on('msg', async function (data) {
+        let obj = { msg: data.msg };
         db.data.confessionsData.push(obj);
-        db.write()
-            .then(() => {
-                console.log('Saved to database')
-
-                //Send a response to ALL clients
-                io.sockets.emit('msg', data);
-            });
+        await db.write();
+        io.sockets.emit('msg', data);
     });
 
-    //Listen for this client to disconnect
     socket.on('disconnect', function () {
-        console.log('A client has disconnected: ' + socket.id);
+        console.log('Client disconnected:', socket.id);
     });
 });
-
-
-// app.listen(3000,() => {
-//     console.log('listening at localhost:3000');
-// });
