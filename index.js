@@ -1,8 +1,9 @@
 // let express = require('express');
-//Install and load lowdb
+//Install and load lowdb & gist 
+import 'dotenv/config';
 import express from 'express';
 import { Low } from 'lowdb';
-import { JSONFile } from 'lowdb/node';
+import { GistDB } from 'gistdb';
 import bodyParser from 'body-parser';
 import { createServer } from 'http';
 import { Server } from 'socket.io';
@@ -12,7 +13,11 @@ let app = express();
 
 //Connect to database
 let defaultData = { confessionsData: [] };
-let adapter = new JSONFile('db.json');
+let adapter = new GistDB({
+    token: process.env.GIST_TOKEN,
+    gistId: process.env.GIST_ID,
+    filename: process.env.GIST_FILENAME
+});
 let db = new Low(adapter, defaultData);
 
 //Initialize/read database
